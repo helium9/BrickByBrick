@@ -1,0 +1,32 @@
+# Databricks
+.databricks/
+
+# IDE / Editor
+.vscode/
+.idea/
+*.swp
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Environments
+.env
+.venv/
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Data
+*.csv
+*.parquet
+*.json
+*.sqlite3
+
+# OS Files
+.DS_Store
+
