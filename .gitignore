@@ -26,9 +26,9 @@ venv.bak/
 # Data
 *.csv
 *.parquet
-*.json
 *.sqlite3
 
 # OS Files
 .DS_Store
+crawler/storage
 

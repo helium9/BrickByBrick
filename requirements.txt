@@ -1,0 +1,7 @@
+fastapi==0.136.0
+uvicorn==0.44.0
+databricks-sql-connector==4.2.5
+pyarrow==23.0.1
+python-dotenv==1.2.2
+
+
