@@ -6,6 +6,8 @@ import requests
 import datetime
 from dotenv import load_dotenv
 import os
+from google.oauth2 import id_token
+from google.auth.transport import requests as google_requests
 
 load_dotenv()
 app = FastAPI()
@@ -26,7 +28,12 @@ class ChatRequest(BaseModel):
     session_id: str 
     query: str
     url: str
+    auth_token: str | None = None
     # Removed 'context' from here
+
+class SyncRequest(BaseModel):
+    auth_token: str
+    payload: dict
 
 def get_db_connection():
     return sql.connect(
@@ -116,6 +123,20 @@ def call_sarvam_ai(query, chat_history):
 
 @app.post("/chat")
 async def chat_endpoint(req: ChatRequest):
+    if not req.auth_token:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=401, detail="Unauthorized: Missing auth token")
+    
+    try:
+        idinfo = id_token.verify_oauth2_token(
+            req.auth_token, 
+            google_requests.Request(), 
+            "793504204288-6llr8actft5lg39atdblgat9vmadq4su.apps.googleusercontent.com"
+        )
+    except ValueError:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=401, detail="Unauthorized: Invalid token")
+
     past_history = get_chat_history(req.session_id, limit=5)
     
     # Removed req.context from this function call
@@ -124,3 +145,22 @@ async def chat_endpoint(req: ChatRequest):
     save_to_databricks(req.session_id, req.url, req.query, ai_answer)
     
     return {"answer": ai_answer}
+
+@app.post("/sync")
+def sync_local_storage(request: SyncRequest):
+    try:
+        # Verify the token with Google
+        idinfo = id_token.verify_oauth2_token(
+            request.auth_token, 
+            google_requests.Request(), 
+            "793504204288-6llr8actft5lg39atdblgat9vmadq4su.apps.googleusercontent.com"
+        )
+        user_id = idinfo['sub']
+        user_email = idinfo['email']
+
+        # TODO: Upsert the request.payload to Databricks keyed by user_email
+        print(f"Syncing data for {user_email}")
+        return {"status": "success"}
+
+    except ValueError:
+        return {"error": "Invalid token"}, 401
