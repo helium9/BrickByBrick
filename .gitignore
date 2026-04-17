@@ -1,5 +1,7 @@
 # Databricks
 .databricks/
+databricks.yml
+
 
 # IDE / Editor
 .vscode/
