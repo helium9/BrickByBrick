@@ -3,14 +3,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from databricks import sql
 import requests
-import uuid
 import datetime
-from dot_env import load_dotenv
+from dotenv import load_dotenv
 import os
+
 load_dotenv()
 app = FastAPI()
 
-# 1. CORS is REQUIRED for Chrome Extensions to talk to localhost
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"], 
@@ -18,19 +17,16 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 2. Your Config (Replace these with your actual keys)
 DATABRICKS_SERVER_HOSTNAME = os.getenv("DATABRICKS_SERVER_HOSTNAME")
 DATABRICKS_HTTP_PATH = os.getenv("DATABRICKS_HTTP_PATH")
 DATABRICKS_TOKEN = os.getenv("DATABRICKS_TOKEN")
 SARVAM_API_KEY = os.getenv("SARVAM_API_KEY")
 
-
-
 class ChatRequest(BaseModel):
     session_id: str 
     query: str
     url: str
-    context: str
+    # Removed 'context' from here
 
 def get_db_connection():
     return sql.connect(
@@ -40,7 +36,6 @@ def get_db_connection():
     )
 
 def get_chat_history(session_id, limit=5):
-    """Fetches the last N messages for this session from Databricks"""
     query_str = """
         SELECT user_query, ai_response 
         FROM workspace.default.extension_chat_history 
@@ -55,8 +50,6 @@ def get_chat_history(session_id, limit=5):
         cursor.execute(query_str, (session_id, limit))
         rows = cursor.fetchall()
         
-        # Databricks returns newest first (DESC). We need to reverse it 
-        # so the LLM reads it in chronological order (oldest to newest)
         for row in reversed(rows):
             history.append({
                 "user": row.user_query,
@@ -71,7 +64,6 @@ def get_chat_history(session_id, limit=5):
     return history
 
 def save_to_databricks(session_id, url, query, response):
-    """Saves the new message to Databricks"""
     query_str = """
         INSERT INTO workspace.default.extension_chat_history 
         (session_id, url, user_query, ai_response, timestamp) 
@@ -86,19 +78,17 @@ def save_to_databricks(session_id, url, query, response):
     except Exception as e:
         print(f"❌ Databricks Insert Error: {e}")
 
-def call_sarvam_ai(query, page_context, chat_history):
-    """Calls Sarvam AI using page context AND previous conversation memory"""
+# Removed page_context parameter
+def call_sarvam_ai(query, chat_history): 
     url = "https://api.sarvam.ai/v1/chat/completions" 
     headers = {
         "Content-Type": "application/json",
         "Authorization": f"Bearer {SARVAM_API_KEY}"
     }
     
-    safe_context = page_context[:5000] 
-    
-    # 1. Start with the System Prompt
+    # 1. Clean System Prompt (No more webpage injection)
     messages = [
-        {"role": "system", "content": f"You are a helpful assistant. Use the following webpage content to help answer questions: {safe_context}"}
+        {"role": "system", "content": "You are a helpful, intelligent AI assistant."}
     ]
     
     # 2. Inject the last 5 messages from Databricks history
@@ -110,7 +100,7 @@ def call_sarvam_ai(query, page_context, chat_history):
     messages.append({"role": "user", "content": query})
 
     payload = {
-        "model": "sarvam-30b", # Or whichever model you settled on
+        "model": "sarvam-30b", 
         "messages": messages
     }
     
@@ -126,13 +116,11 @@ def call_sarvam_ai(query, page_context, chat_history):
 
 @app.post("/chat")
 async def chat_endpoint(req: ChatRequest):
-    # 1. Get the last 5 messages for this specific user session
     past_history = get_chat_history(req.session_id, limit=5)
     
-    # 2. Ask Sarvam, passing the history
-    ai_answer = call_sarvam_ai(req.query, req.context, past_history)
+    # Removed req.context from this function call
+    ai_answer = call_sarvam_ai(req.query, past_history)
     
-    # 3. Save this new Q&A to Databricks
     save_to_databricks(req.session_id, req.url, req.query, ai_answer)
     
     return {"answer": ai_answer}
