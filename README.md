@@ -27,6 +27,8 @@
 
 ---
 
+<img width="2556" height="1436" alt="image" src="https://github.com/user-attachments/assets/3b51572b-d624-4963-a1ae-c0fd680b0480" />
+
 ## The Problem
 
 Navigating government websites in India is notoriously difficult. For the average citizen, these portals are plagued with massive UX issues:
