@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "Bricks AI",
+  "name": "BrickByBrick AI",
   "version": "1.0",
   "permissions": [
     "sidePanel",
