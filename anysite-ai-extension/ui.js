@@ -1,32 +1,37 @@
-// Generate a unique session ID when the panel is opened
-const currentSessionId = Date.now().toString() + Math.random().toString(36).substring(2);
+let currentSessionId = Date.now().toString() + Math.random().toString(36).substring(2);
 
 let authToken = null;
+let appReady = false;
 
-const clientId = "793504204288-6llr8actft5lg39atdblgat9vmadq4su.apps.googleusercontent.com"; 
-const redirectUri = chrome.identity.getRedirectURL();
-console.log("Your EXACT Redirect URI is:", redirectUri);
-const scopes = ["https://www.googleapis.com/auth/userinfo.email"];
-const authUrl = `https://accounts.google.com/o/oauth2/auth?client_id=${clientId}&response_type=token&redirect_uri=${encodeURIComponent(redirectUri)}&scope=${encodeURIComponent(scopes.join(" "))}`;
+// --- 1. Strict 2-second splash, then reveal chatbot ---
+setTimeout(() => {
+  if (window.hideSplash) window.hideSplash();
+  appReady = true;
+  // If OAuth failed before UI was ready, show the error now
+  if (window._pendingAuthError) {
+    appendMessage("ai", window._pendingAuthError);
+    window._pendingAuthError = null;
+  }
+}, 2000);
 
-chrome.identity.launchWebAuthFlow(
-  {
-    url: authUrl,
-    interactive: true,
-  },
-  function (redirectUrl) {
-    if (chrome.runtime.lastError) {
-      console.error("OAuth Error:", chrome.runtime.lastError.message || chrome.runtime.lastError);
-      appendMessage("ai", `⚠️ Could not authenticate with Google: ${chrome.runtime.lastError.message || "Unknown error"}`);
-      return;
+// --- 2. OAuth runs in parallel (does NOT block UI) ---
+chrome.runtime.sendMessage({ action: "getAuthToken" }, (response) => {
+  if (chrome.runtime.lastError || !response || response.error) {
+    const errMsg = `Authentication failed: ${chrome.runtime.lastError?.message || response?.error || "Unknown error"}`;
+    console.error("OAuth Error:", errMsg);
+    // If chatbot is already visible, show error immediately; otherwise queue it
+    if (appReady) {
+      appendMessage("ai", errMsg);
+    } else {
+      window._pendingAuthError = errMsg;
     }
+    return;
+  }
 
-    const urlParams = new URLSearchParams(new URL(redirectUrl).hash.substring(1));
-    authToken = urlParams.get("access_token");
-    console.log("OAuth token received.");
-    syncLocalStorage();
-  },
-);
+  authToken = response.token;
+  console.log("OAuth token received from background.");
+  syncLocalStorage();
+});
 
 async function syncLocalStorage() {
   if (!authToken) return;
@@ -46,48 +51,31 @@ async function syncLocalStorage() {
       }),
     });
     if (response.ok) {
-      console.log("Local storage synced with backend successfully.");
+      console.log("Local storage synced.");
     }
   } catch (error) {
     console.error("Failed to sync storage:", error);
   }
 }
 
-// 1. The Mini Markdown Parser
-// 1. The Mini Markdown Parser
 function renderMarkdown(text) {
   if (!text) return "";
 
   let html = text
-    // 0. Links: [Text](URL) -> <a href="URL" target="_blank">Text</a>
-    .replace(/\[([^\]]+)\]\(([^\)]+)\)/g, '<a href="$2" target="_blank" style="color: #1a73e8; text-decoration: underline;">$1</a>')
-    
-    // 1. Headers: ### Header -> <h3>Header</h3>
+    .replace(/\[([^\]]+)\]\(([^\)]+)\)/g, '<a href="$2" target="_blank" style="color: #E8311A; text-decoration: underline; text-underline-offset: 2px;">$1</a>')
     .replace(/^###\s+(.*)$/gm, '<h3 style="margin: 8px 0; font-size: 14px;">$1</h3>')
     .replace(/^##\s+(.*)$/gm, '<h2 style="margin: 8px 0; font-size: 16px;">$1</h2>')
     .replace(/^#\s+(.*)$/gm, '<h1 style="margin: 8px 0; font-size: 18px;">$1</h1>')
-    
-    // 2. Horizontal Rules: --- -> <hr>
-    .replace(/^---$/gm, '<hr style="margin: 10px 0; border: 0; border-top: 1px solid #ddd;" />')
-
-    // 3. Bold text: **word** -> <strong>word</strong>
+    .replace(/^---$/gm, '<hr style="margin: 10px 0; border: 0; border-top: 1px solid rgba(255,255,255,0.2);" />')
     .replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>")
-
-    // 4. Italic text: *word* -> <em>word</em>
     .replace(/(?<!\*)\*(?!\*)(.*?)\*/g, "<em>$1</em>")
-
-    // 5. Bullet points: * Item -> <li>Item</li>
     .replace(/^\s*[\*\-]\s+(.*)$/gm, "<li>$1</li>")
-
-    // 6. Wrap consecutive <li> items in a <ul> block
     .replace(/(<li>.*?<\/li>(\s*|$))+/g, (match) => `<ul style="margin: 5px 0; padding-left: 20px;">${match}</ul>`)
-
-    // 7. Line breaks: Convert \n to <br>, but ignore newlines inside lists
     .replace(/\n(?!<ul|<\/ul|<li|<\/li|<h|<hr)/g, "<br>");
 
   return html;
 }
-// 2. The Single, Corrected appendMessage Function
+
 function appendMessage(sender, text) {
   const log = document.getElementById("log");
   const msgDiv = document.createElement("div");
@@ -105,7 +93,7 @@ function appendMessage(sender, text) {
 
 document.getElementById("btn").onclick = async () => {
   if (!authToken) {
-    appendMessage("ai", "⚠️ Please wait for authentication to complete before sending messages.");
+    appendMessage("ai", "Please wait for authentication to complete before sending messages.");
     return;
   }
 
@@ -116,21 +104,33 @@ document.getElementById("btn").onclick = async () => {
   appendMessage("user", q);
   inputField.value = "";
 
-  // Show a loading indicator immediately
   const log = document.getElementById("log");
   const loadingDiv = document.createElement("div");
   loadingDiv.className = "msg ai";
   loadingDiv.id = "loading";
-  loadingDiv.innerHTML = "<i>Processing...</i>";
+  loadingDiv.innerHTML = '<div class="typing-dots"><span></span><span></span><span></span></div>';
   log.appendChild(loadingDiv);
   log.scrollTop = log.scrollHeight;
 
   try {
-    // 🛡️ THE FIX: Safely retrieve the tab inside the try-catch block
     let currentUrl = "unknown";
+    let pageContext = "";
     if (chrome.tabs) {
       const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-      currentUrl = tab ? tab.url : "unknown";
+      if (tab) {
+        currentUrl = tab.url || "unknown";
+        try {
+          const results = await chrome.scripting.executeScript({
+            target: { tabId: tab.id },
+            func: () => document.body.innerText.substring(0, 5000)
+          });
+          if (results && results[0] && results[0].result) {
+            pageContext = results[0].result;
+          }
+        } catch (e) {
+          console.warn("Could not retrieve page text context:", e);
+        }
+      }
     }
 
     const response = await fetch("https://fastapi-app-7474650190496857.aws.databricksapps.com/chat", {
@@ -139,6 +139,7 @@ document.getElementById("btn").onclick = async () => {
       body: JSON.stringify({
         query: q,
         url: currentUrl,
+        page_context: pageContext,
         session_id: currentSessionId,
         auth_token: authToken,
       }),
@@ -147,10 +148,10 @@ document.getElementById("btn").onclick = async () => {
     const data = await response.json();
     document.getElementById("loading").remove();
     appendMessage("ai", data.answer);
-    
+
   } catch (error) {
     document.getElementById("loading").remove();
-    appendMessage("ai", "⚠️ Error: Could not connect to backend.");
+    appendMessage("ai", "Error: Could not connect to backend.");
     console.error("Chat Error:", error);
   }
 };
@@ -159,4 +160,19 @@ document.getElementById("q").addEventListener("keypress", function (e) {
   if (e.key === "Enter") {
     document.getElementById("btn").click();
   }
+});
+
+document.getElementById("new-chat-btn")?.addEventListener("click", () => {
+  const log = document.getElementById("log");
+  log.innerHTML = '<div class="msg ai">Welcome. Ask me anything about navigating this page or finding government services.</div>';
+  currentSessionId = Date.now().toString() + Math.random().toString(36).substring(2);
+});
+
+document.querySelectorAll(".suggestion-chip").forEach(chip => {
+  chip.addEventListener("click", () => {
+    const q = chip.textContent;
+    const inputField = document.getElementById("q");
+    inputField.value = q;
+    document.getElementById("btn").click();
+  });
 });
