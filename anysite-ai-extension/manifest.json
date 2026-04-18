@@ -8,7 +8,8 @@
     "scripting",
     "tabs",
     "identity",
-    "storage"
+    "storage",
+    "contextMenus"
   ],
   "oauth2": {
     "client_id": "793504204288-6llr8actft5lg39atdblgat9vmadq4su.apps.googleusercontent.com",
@@ -25,6 +26,16 @@
   "side_panel": {
     "default_path": "ui.html"
   },
+  "content_scripts": [
+    {
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "content.js"
+      ]
+    }
+  ],
   "action": {},
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAx/sLjo5buguoO0UPOLmBHeF28SEcPn336FyumiI5lx3RZSTbwtL7wtgqmb8F/8jXtJi4KMKOZfR1yLf3XUPyPqSj4BZ5kayUscwFryYMKpUyo+6dTli90fvBMlzahxq3QnY7VxXMMYtaDlGPeOkcEXBxXc+IdAeogQDUuBPacwgq3Zg2RtKtVB60KkJgctKcp/lKcdE6cIXboCxHKyY8svUjF9BP5YVA1tGiDNYdSgrb4MqzGAMx7Ub6MJT5VLMbJ0oiAoDNrdQNj4hnNSF85nH8TB2SA7JFMkJ3yvcZuOKO7dyZpwFnxVd2tGsvPd7ICBLKAgOzb6tIFu2un0YirwIDAQAB"
 }
