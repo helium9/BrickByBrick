@@ -5,8 +5,14 @@ from databricks import sql
 import requests
 import uuid
 import datetime
-from dot_env import load_dotenv
+from dotenv import load_dotenv
 import os
+import json
+import re
+from urllib.parse import urlparse
+import shutil
+from pathlib import Path
+
 load_dotenv()
 app = FastAPI()
 
@@ -23,8 +29,6 @@ DATABRICKS_SERVER_HOSTNAME = os.getenv("DATABRICKS_SERVER_HOSTNAME")
 DATABRICKS_HTTP_PATH = os.getenv("DATABRICKS_HTTP_PATH")
 DATABRICKS_TOKEN = os.getenv("DATABRICKS_TOKEN")
 SARVAM_API_KEY = os.getenv("SARVAM_API_KEY")
-
-
 
 class ChatRequest(BaseModel):
     session_id: str 
@@ -123,6 +127,139 @@ def call_sarvam_ai(query, page_context, chat_history):
             return "Error: Sarvam AI rejected the request."
     except Exception as e:
         return f"Error connecting to Sarvam: {e}"
+    
+class Profile:
+    def __init__(self, user_details: dict):
+        self.personal_details = user_details.get("personal_details", {})
+        self.address_details = user_details.get("address_details", {})
+        self.identity_documents = user_details.get("identity_documents", {})
+        self.additional_info = user_details.get("additional_info", {})
+
+    def __repr__(self):
+        return (
+            f"Profile(personal_details={self.personal_details}, "
+            f"address_details={self.address_details}, "
+            f"identity_documents={self.identity_documents}, "
+            f"additional_info={self.additional_info})"
+        )
+
+def extract_json(text: str):
+    if not text:
+        return None
+
+    text = re.sub(r"```(?:json)?\s*([\s\S]*?)\s*```", r"\1", text)
+
+    try:
+        return json.loads(text.strip())
+    except:
+        pass
+
+    match = re.search(r"\{[\s\S]*\}", text)
+    if match:
+        candidate = match.group()
+        try:
+            return json.loads(candidate)
+        except:
+            pass
+
+    return None
+
+class PDFProfileRequest(BaseModel):
+    pdf_url: str
+    
+def fetch_pdf(pdf_url: str) -> str:
+    """
+    Returns local file path of PDF
+    Handles:
+    - file://
+    - http/https
+    """
+
+    parsed = urlparse(pdf_url)
+
+    if parsed.scheme == "file":
+        return parsed.path  # local file
+
+    elif parsed.scheme in ["http", "https"]:
+        temp_path = f"/tmp/{uuid.uuid4()}.pdf"
+        response = requests.get(pdf_url)
+
+        if response.status_code != 200:
+            raise Exception("Failed to download PDF")
+
+        with open(temp_path, "wb") as f:
+            f.write(response.content)
+
+        return temp_path
+
+    else:
+        raise Exception("Unsupported URL scheme")
+    
+def fill_pdf(input_pdf_path: str, user_data: dict) -> str:
+    from reportlab.pdfgen import canvas
+    from reportlab.lib.pagesizes import letter
+    from pypdf import PdfReader, PdfWriter
+    from io import BytesIO
+
+    name = user_data["personal_details"]["full_name"]
+    addr = user_data["address_details"]
+
+    address_lines = [
+        f"{addr['house_no']} {addr['street']}",
+        addr["city"],
+        f"{addr['state']} - {addr['pincode']}"
+    ]
+
+    FONT_SIZE = 7
+
+    def write(c, text, x, y):
+        c.setFont("Helvetica", FONT_SIZE)
+        c.drawString(x + 2, y - 2, text)
+
+    packet = BytesIO()
+    c = canvas.Canvas(packet, pagesize=letter)
+
+    # ---- WRITE FIELDS ----
+    write(c, "18/04/2026", 405, 710)
+    write(c, "Bhopal Constituency", 105, 640)
+    write(c, "Bhopal Central Booth", 145, 555)
+    write(c, "Bhopal", 265, 530)
+
+    # Address
+    y = 280
+    for i, line in enumerate(address_lines):
+        write(c, line, 115, y - i * 12)
+
+    write(c, name, 355, 115)
+    write(c, name, 355, 85)
+
+    c.save()
+
+    # Merge
+    packet.seek(0)
+    overlay = PdfReader(packet)
+    original = PdfReader(input_pdf_path)
+
+    writer = PdfWriter()
+
+    for i in range(len(original.pages)):
+        page = original.pages[i]
+        if i < len(overlay.pages):
+            page.merge_page(overlay.pages[i])
+        writer.add_page(page)
+
+    # ---- OUTPUT PATH ----
+    downloads = str(Path.home() / "Downloads")
+
+    base_name = os.path.basename(input_pdf_path).replace(".pdf", "")
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    output_path = os.path.join(downloads, f"{base_name}-{timestamp}.pdf")
+
+    with open(output_path, "wb") as f:
+        writer.write(f)
+
+    return output_path
 
 @app.post("/chat")
 async def chat_endpoint(req: ChatRequest):
@@ -136,3 +273,90 @@ async def chat_endpoint(req: ChatRequest):
     save_to_databricks(req.session_id, req.url, req.query, ai_answer)
     
     return {"answer": ai_answer}
+
+class ProfileRequest(BaseModel):
+    required_data: list[str]
+
+@app.post("/profile")
+async def get_profile(request: ProfileRequest):
+    print("🔥 /profile endpoint called")
+    print(f"📋 Required fields requested: {request.required_data}")
+
+    file_path = './userdata.json'
+
+    if os.path.exists(file_path):
+        with open(file_path, 'r') as file:
+            user_profile = json.load(file)
+        print(f"✅ User profile loaded from {file_path}")
+    else:
+        # TODO: Fetch user_profile from database
+        user_profile = {}
+        print(f"⚠️ {file_path} not found, using empty profile")
+
+    profile = Profile(user_profile)
+    print(f"Profile object created: {profile}")
+
+    PROMPT = f"""
+You are given a user profile JSON and a list of requested fields.
+
+User Profile:
+{json.dumps(user_profile)}
+
+Required Fields:
+{request.required_data}
+
+Instructions:
+- Map each requested field to the most relevant value from the user profile.
+- The OUTPUT keys MUST EXACTLY match the requested fields (case-sensitive).
+- Do NOT modify keys.
+- Return ONLY valid JSON.
+"""
+
+    print("📨 Calling Sarvam AI...")
+    ai_response = call_sarvam_ai(
+        query=PROMPT,
+        page_context="",
+        chat_history=[]
+    )
+    print(f"🤖 AI Response: {ai_response}")
+
+    try:
+        response = extract_json(ai_response)
+        print("Response: ", response)
+    except Exception:
+        response = {"error": "Invalid JSON from LLM", "raw": ai_response}
+
+    print(f"📤 Returning response: {response}")
+    return response
+
+@app.post("/pdf-profile")
+async def pdf_profile(req: PDFProfileRequest):
+    print("📄 /pdf-profile called")
+
+    # 1. Fetch PDF
+    try:
+        pdf_path = fetch_pdf(req.pdf_url)
+        print(f"✅ PDF fetched: {pdf_path}")
+    except Exception as e:
+        return {"error": str(e)}
+
+    # 2. Load user data
+    file_path = "./userdata.json"
+
+    if not os.path.exists(file_path):
+        return {"error": "userdata.json not found"}
+
+    with open(file_path, "r") as f:
+        user_data = json.load(f)
+
+    # 3. Fill PDF
+    try:
+        output_path = fill_pdf(pdf_path, user_data)
+        print(f"✅ PDF generated: {output_path}")
+    except Exception as e:
+        return {"error": f"PDF generation failed: {str(e)}"}
+
+    return {
+        "message": "PDF generated successfully",
+        "download_path": output_path
+    }

@@ -1,5 +1,6 @@
 // Generate a unique session ID when the panel is opened
 const currentSessionId = Date.now().toString() + Math.random().toString(36).substring(2);
+
 function appendMessage(sender, text) {
   const log = document.getElementById('log');
   const msgDiv = document.createElement('div');
@@ -13,21 +14,21 @@ document.getElementById('btn').onclick = async () => {
   const inputField = document.getElementById('q');
   const q = inputField.value.trim();
   if (!q) return;
-  
+
   appendMessage('user', q);
   inputField.value = '';
 
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
 
-if (!tab || !tab.url || tab.url.startsWith('chrome://') || tab.url.startsWith('edge://')) {
+  if (!tab || !tab.url || tab.url.startsWith('chrome://') || tab.url.startsWith('edge://')) {
     appendMessage('ai', "⚠️ I cannot read system pages. Please navigate to a normal website.");
-    return; 
+    return;
   }
 
-chrome.scripting.executeScript({
+  chrome.scripting.executeScript({
     target: { tabId: tab.id },
-    func: () => document.body.innerText 
-  }, async (res) => { 
+    func: () => document.body.innerText
+  }, async (res) => {
     // 🛡️ THE FIX: Check if Chrome blocked the injection or if the result is empty
     if (chrome.runtime.lastError || !res || !res[0]) {
       appendMessage('ai', "⚠️ Chrome's strict security is blocking me from reading this specific page (e.g., Chrome Web Store or internal pages).");
@@ -35,7 +36,7 @@ chrome.scripting.executeScript({
     }
 
     const pageText = res[0].result;
-    
+
     // Show a loading indicator
     const log = document.getElementById('log');
     const loadingDiv = document.createElement('div');
