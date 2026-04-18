@@ -32,3 +32,4 @@ venv.bak/
 .DS_Store
 crawler/storage
 neo4j_credentials.txt
+app.yaml

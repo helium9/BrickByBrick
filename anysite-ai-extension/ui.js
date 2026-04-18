@@ -54,17 +54,39 @@ async function syncLocalStorage() {
 }
 
 // 1. The Mini Markdown Parser
+// 1. The Mini Markdown Parser
 function renderMarkdown(text) {
   if (!text) return "";
+
   let html = text
+    // 0. Links: [Text](URL) -> <a href="URL" target="_blank">Text</a>
+    .replace(/\[([^\]]+)\]\(([^\)]+)\)/g, '<a href="$2" target="_blank" style="color: #1a73e8; text-decoration: underline;">$1</a>')
+    
+    // 1. Headers: ### Header -> <h3>Header</h3>
+    .replace(/^###\s+(.*)$/gm, '<h3 style="margin: 8px 0; font-size: 14px;">$1</h3>')
+    .replace(/^##\s+(.*)$/gm, '<h2 style="margin: 8px 0; font-size: 16px;">$1</h2>')
+    .replace(/^#\s+(.*)$/gm, '<h1 style="margin: 8px 0; font-size: 18px;">$1</h1>')
+    
+    // 2. Horizontal Rules: --- -> <hr>
+    .replace(/^---$/gm, '<hr style="margin: 10px 0; border: 0; border-top: 1px solid #ddd;" />')
+
+    // 3. Bold text: **word** -> <strong>word</strong>
     .replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>")
+
+    // 4. Italic text: *word* -> <em>word</em>
     .replace(/(?<!\*)\*(?!\*)(.*?)\*/g, "<em>$1</em>")
+
+    // 5. Bullet points: * Item -> <li>Item</li>
     .replace(/^\s*[\*\-]\s+(.*)$/gm, "<li>$1</li>")
-    .replace(/(<li>.*?<\/li>(\s*|$))+/g, (match) => `<ul>${match}</ul>`)
-    .replace(/\n(?!<ul|<\/ul|<li|<\/li)/g, "<br>");
+
+    // 6. Wrap consecutive <li> items in a <ul> block
+    .replace(/(<li>.*?<\/li>(\s*|$))+/g, (match) => `<ul style="margin: 5px 0; padding-left: 20px;">${match}</ul>`)
+
+    // 7. Line breaks: Convert \n to <br>, but ignore newlines inside lists
+    .replace(/\n(?!<ul|<\/ul|<li|<\/li|<h|<hr)/g, "<br>");
+
   return html;
 }
-
 // 2. The Single, Corrected appendMessage Function
 function appendMessage(sender, text) {
   const log = document.getElementById("log");
