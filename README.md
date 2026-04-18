@@ -1,12 +1,15 @@
 # BrickByBrick AI
 
 > An intelligent, multilingual browser assistant that transforms the broken, frustrating experience of navigating Indian government portals into a seamless conversation — powered by Databricks, Neo4j, Sarvam AI, and PySpark Vector RAG.
+<img width="2556" height="1436" alt="image" src="https://github.com/user-attachments/assets/58146e4e-d9fb-4cbd-8c4c-3e5c4e481736" />
+
+## 🎥 Project Presentation  
+👉 **[View Full Canva Presentation](https://www.canva.com/design/DAHHMpzT5_c/E3NVvkNdjwxqLOMGgcPIyA/edit?ui=eyJBIjp7fX0)**
 
 [![Databricks](https://img.shields.io/badge/Databricks-FF3621?style=for-the-badge&logo=databricks&logoColor=white)](https://databricks.com)
 [![Neo4j](https://img.shields.io/badge/Neo4j-4581C3?style=for-the-badge&logo=neo4j&logoColor=white)](https://neo4j.com)
 [![FastAPI](https://img.shields.io/badge/FastAPI-009688?style=for-the-badge&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
 [![Chrome Extension](https://img.shields.io/badge/Chrome_Extension-4285F4?style=for-the-badge&logo=googlechrome&logoColor=white)](https://developer.chrome.com/docs/extensions/)
-
 ---
 
 ## Table of Contents
