@@ -41,6 +41,12 @@ class SyncRequest(BaseModel):
     auth_token: str
     payload: dict
 
+class ProfileUpdateRequest(BaseModel):
+    auth_token: str
+    data: dict
+
+VALID_TABLES = ["personal_details", "address_details", "identity_documents", "additional_info"]
+
 def get_db_connection():
     return sql.connect(
         server_hostname=DATABRICKS_SERVER_HOSTNAME,
@@ -66,8 +72,8 @@ def get_chat_history(session_id, limit=5):
             history.append({"user": row.user_query, "ai": row.ai_response})
         cursor.close()
         connection.close()
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"History Fetch Error: {e}")
     return history
 
 def save_to_databricks(session_id, url, query, response):
@@ -82,8 +88,8 @@ def save_to_databricks(session_id, url, query, response):
         cursor.execute(query_str, (session_id, url, query, response, datetime.datetime.now()))
         cursor.close()
         connection.close()
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"Databricks Insert Error: {e}")
 
 def classify_intent_with_sarvam(query: str) -> str:
     url = "https://api.sarvam.ai/v1/chat/completions" 
@@ -114,82 +120,49 @@ def classify_intent_with_sarvam(query: str) -> str:
     except Exception:
         return "GENERAL"
 
-def get_query_embedding(text: str) -> list:
-    url = "https://api.sarvam.ai/v1/embeddings"
-    headers = {"Content-Type": "application/json", "Authorization": f"Bearer {SARVAM_API_KEY}"}
-    try:
-        response = requests.post(url, json={"input": text}, headers=headers)
-        if response.status_code == 200:
-            return response.json()["data"][0]["embedding"]
-    except Exception:
-        pass
-    return [0.0] * 768
+def retrieve_neo4j_context(intent: str, current_url: str) -> str:
+    if intent == "GENERAL":
+        return "" 
 
-def retrieve_neo4j_context(intent: str, current_url: str, query: str) -> str:
     context_data = []
     with neo4j_driver.session() as session:
         if intent == "KNOWLEDGE":
-            query_vector = get_query_embedding(query)
-            cypher_query = """
-            CALL db.index.vector.queryNodes('summary_index', 1, $query_vector)
-            YIELD node, score
-            RETURN node.summary AS current_summary, node.url AS url
+            query = """
+            MATCH (n:Page {url: $url})
+            OPTIONAL MATCH (n)-[:HAS_SUBPATH]->(child:Page)
+            RETURN n.summary AS current_summary, collect({url: child.url, summary: child.summary}) AS children
             """
-            try:
-                result = session.run(cypher_query, query_vector=query_vector).single()
-                if result and result['current_summary']:
-                    context_data.append(f"Fact Sheet ({result['url']}): {result['current_summary']}")
-            except Exception:
-                pass
+            result = session.run(query, url=current_url).single()
+            if result:
+                context_data.append(f"Current Page Info: {result['current_summary']}")
+                for child in result['children']:
+                    if child['summary']:
+                        context_data.append(f"Related Sub-page ({child['url']}): {child['summary']}")
                         
         elif intent == "NAVIGATION":
-            cypher_query = """
-            MATCH path = (start:Page {url: $url})-[:HAS_SUBPATH*1..4]->(target:Page {is_leaf: true})
-            WITH target, 0.85 ^ length(path) AS path_score
-            WITH target, sum(path_score) AS ppr_score
-            ORDER BY ppr_score DESC
+            query = """
+            MATCH (n:Page {url: $url})-[:HAS_SUBPATH*1..3]->(descendant:Page {is_leaf: true})
+            RETURN descendant.url AS url, descendant.summary AS summary
             LIMIT 5
-            RETURN target.url AS url, target.summary AS summary
             """
-            try:
-                results = session.run(cypher_query, url=current_url)
-                context_data.append("Available actions and sub-paths from this location:")
-                for record in results:
-                     if record['summary']:
-                         context_data.append(f"Path -> {record['url']} | Content: {record['summary']}")
-            except Exception:
-                pass
+            results = session.run(query, url=current_url)
+            context_data.append("Available actions and sub-paths from this location:")
+            for record in results:
+                 if record['summary']:
+                     context_data.append(f"Path -> {record['url']} | Content: {record['summary']}")
                      
-    return "\n".join(context_data) if context_data else "No specific graph context found for this query or URL."
+    return "\n".join(context_data) if context_data else "No specific graph context found for this URL."
 
 def generate_final_answer(query: str, chat_history: list, context: str, intent: str) -> str:
     url = "https://api.sarvam.ai/v1/chat/completions" 
     headers = {"Content-Type": "application/json", "Authorization": f"Bearer {SARVAM_API_KEY}"}
     
     if intent == "NAVIGATION":
-        sys_msg = f"""You are a Navigation Assistant for the Indian Income Tax portal (incometax.gov.in).
-        CRITICAL RULES:
-        1. STRICT GROUNDING: You MUST ONLY suggest URLs explicitly listed in the "Available Paths" below. 
-        2. NO HALLUCINATION: Never mention the IRS, US forms (like 1065), or external sites. 
-        3. IF NO MATCH: If the paths below are empty or irrelevant, you MUST reply: "There are no direct links for that from this specific page. Please try from the homepage."
-        4. FORMAT: Output 1-2 very short steps. You MUST format URLs as Markdown links: [Click here to proceed](URL).
-        
-        Available Paths:
-        {context}"""
-        
+        sys_msg = f"You are a Government UI Assistant. Guide the user step-by-step based on the provided sub-paths. Context:\n{context}"
     elif intent == "KNOWLEDGE":
-        sys_msg = f"""You are a Knowledge Assistant for the Indian Income Tax portal (incometax.gov.in).
-        CRITICAL RULES:
-        1. STRICT GROUNDING: Answer strictly using ONLY the "Fact Sheet" below. Do NOT use outside knowledge.
-        2. NO HALLUCINATION: Never mention the IRS or US taxes. You handle Indian taxes exclusively.
-        3. IF NO MATCH: If the Fact Sheet is empty or doesn't contain the answer, you MUST reply: "I do not have that information in my current database."
-        4. FORMAT: Keep it extremely short (1-2 bullet points maximum).
-        
-        Fact Sheet:
-        {context}"""
-        
+        sys_msg = f"You are a Government Knowledge Assistant. Answer the user's question directly using the provided context. Context:\n{context}"
     else:
-        sys_msg = "You are a friendly browser assistant for the Indian Income Tax portal. Greet the user in 1 short sentence."
+        sys_msg = "You are a friendly and helpful Government AI Assistant. Respond conversationally to the user."
 
     messages = [{"role": "system", "content": sys_msg}]
     
@@ -201,7 +174,8 @@ def generate_final_answer(query: str, chat_history: list, context: str, intent: 
 
     payload = {
         "model": "sarvam-30b", 
-        "messages": messages
+        "messages": messages,
+        "max_tokens": 1500
     }
     
     try:
@@ -209,10 +183,13 @@ def generate_final_answer(query: str, chat_history: list, context: str, intent: 
         if response.status_code == 200:
             return response.json()["choices"][0]["message"]["content"]
         else:
-            return f"Sarvam API Error ({response.status_code}): {response.text}"
+            error_msg = f"Sarvam API Error ({response.status_code}): {response.text}"
+            print(f"❌ {error_msg}") 
+            return error_msg
     except Exception as e:
+        print(f"❌ Critical Sarvam Error: {e}")
         return f"Error connecting to Sarvam: {e}"
-    
+
 @app.post("/chat")
 async def chat_endpoint(req: ChatRequest):
     if not req.auth_token:
@@ -227,14 +204,9 @@ async def chat_endpoint(req: ChatRequest):
         raise HTTPException(status_code=401, detail="Unauthorized: Client ID mismatch")
 
     intent = classify_intent_with_sarvam(req.query)
+    graph_context = retrieve_neo4j_context(intent, req.url)
     past_history = get_chat_history(req.session_id, limit=5)
-
-    if intent == "GENERAL":
-        ai_answer = generate_final_answer(req.query, past_history, "", intent)
-    else:
-        graph_context = retrieve_neo4j_context(intent, req.url, req.query)
-        ai_answer = generate_final_answer(req.query, past_history, graph_context, intent)
-        
+    ai_answer = generate_final_answer(req.query, past_history, graph_context, intent)
     save_to_databricks(req.session_id, req.url, req.query, ai_answer)
     
     return {"answer": ai_answer, "intent_detected": intent}
@@ -247,6 +219,124 @@ def sync_local_storage(request: SyncRequest):
     token_resp = requests.get(f"https://oauth2.googleapis.com/tokeninfo?access_token={request.auth_token}")
     if token_resp.status_code != 200:
         raise HTTPException(status_code=401, detail="Unauthorized: Invalid token")
+        
+    token_info = token_resp.json()
+    user_email = token_info.get('email', 'Unknown Email')
+    
+    print(f"Syncing data for {user_email}")
+    return {"status": "success"}
+
+@app.get("/profile/status")
+def check_profile_status(auth_token: str):
+    token_resp = requests.get(f"https://oauth2.googleapis.com/tokeninfo?access_token={auth_token}")
+    if token_resp.status_code != 200:
+        raise HTTPException(status_code=401, detail="Unauthorized: Invalid token")
+    token_info = token_resp.json()
+    email = token_info.get("email")
+    if not email:
+        raise HTTPException(status_code=400, detail="Email not found in token")
+
+    missing = []
+    try:
+        connection = get_db_connection()
+        cursor = connection.cursor()
+        for table in VALID_TABLES:
+            cursor.execute(f"SELECT 1 FROM workspace.default.{table} WHERE email = ?", (email,))
+            if not cursor.fetchone():
+                missing.append(table)
+        cursor.close()
+        connection.close()
+    except Exception as e:
+        print("Status fetch error:", e)
+    
+    return {"missing_sections": missing}
+
+@app.get("/profile/{table_name}")
+def get_profile_data(table_name: str, auth_token: str):
+    if table_name not in VALID_TABLES:
+        raise HTTPException(status_code=400, detail="Invalid table name")
+
+    token_resp = requests.get(f"https://oauth2.googleapis.com/tokeninfo?access_token={auth_token}")
+    if token_resp.status_code != 200:
+        raise HTTPException(status_code=401, detail="Unauthorized: Invalid token")
+    token_info = token_resp.json()
+    email = token_info.get("email")
+    if not email:
+        raise HTTPException(status_code=400, detail="Email not found in token")
+
+    data = {}
+    try:
+        connection = get_db_connection()
+        cursor = connection.cursor()
+        cursor.execute(f"SELECT * FROM workspace.default.{table_name} WHERE email = ?", (email,))
+        row = cursor.fetchone()
+        if row:
+            columns = [desc[0] for desc in cursor.description]
+            data = dict(zip(columns, row))
+        cursor.close()
+        connection.close()
+    except Exception as e:
+        print("Fetch profile error:", e)
+    
+    return {"data": data}
+
+@app.post("/profile/{table_name}")
+def update_profile_data(table_name: str, req: ProfileUpdateRequest):
+    if table_name not in VALID_TABLES:
+        raise HTTPException(status_code=400, detail="Invalid table name")
+
+    token_resp = requests.get(f"https://oauth2.googleapis.com/tokeninfo?access_token={req.auth_token}")
+    if token_resp.status_code != 200:
+        raise HTTPException(status_code=401, detail="Unauthorized: Invalid token")
+    token_info = token_resp.json()
+    email = token_info.get("email")
+    if not email:
+        raise HTTPException(status_code=400, detail="Email not found in token")
+
+    data = req.data
+    if 'email' in data:
+        del data['email']
+        
+    columns = ['email'] + list(data.keys())
+    values = [email] + list(data.values())
+    source_cols = ", ".join([f"? AS {col}" for col in columns])
+    
+    update_set = ", ".join([f"target.{col} = source.{col}" for col in data.keys()])
+    if update_set:
+        update_set += ", target.updated_at = current_timestamp()"
+    
+    insert_cols = ", ".join(columns) + ", updated_at"
+    insert_vals = ", ".join([f"source.{col}" for col in columns]) + ", current_timestamp()"
+    
+    if table_name == "personal_details":
+        insert_cols += ", created_at"
+        insert_vals += ", current_timestamp()"
+
+    if update_set:
+        query_str = f'''
+            MERGE INTO workspace.default.{table_name} AS target 
+            USING (SELECT {source_cols}) AS source 
+            ON target.email = source.email 
+            WHEN MATCHED THEN UPDATE SET {update_set} 
+            WHEN NOT MATCHED THEN INSERT ({insert_cols}) VALUES ({insert_vals})
+        '''
+    else:
+        query_str = f'''
+            MERGE INTO workspace.default.{table_name} AS target 
+            USING (SELECT {source_cols}) AS source 
+            ON target.email = source.email 
+            WHEN NOT MATCHED THEN INSERT ({insert_cols}) VALUES ({insert_vals})
+        '''
+        
+    try:
+        connection = get_db_connection()
+        cursor = connection.cursor()
+        cursor.execute(query_str, values)
+        cursor.close()
+        connection.close()
+    except Exception as e:
+        print(f"Error in merge: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
         
     return {"status": "success"}
 
