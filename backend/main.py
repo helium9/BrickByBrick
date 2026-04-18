@@ -13,6 +13,20 @@ import json
 import re
 from urllib.parse import urlparse
 import shutil
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+from databricks import sql
+import requests
+import uuid
+import datetime
+from dotenv import load_dotenv
+import os
+import json
+import re
+from urllib.parse import urlparse
+import shutil
+from pathlib import Path
 from pathlib import Path
 
 load_dotenv()
@@ -29,6 +43,12 @@ DATABRICKS_SERVER_HOSTNAME = os.getenv("DATABRICKS_SERVER_HOSTNAME")
 DATABRICKS_HTTP_PATH = os.getenv("DATABRICKS_HTTP_PATH")
 DATABRICKS_TOKEN = os.getenv("DATABRICKS_TOKEN")
 SARVAM_API_KEY = os.getenv("SARVAM_API_KEY")
+
+NEO4J_URI = os.getenv("NEO4J_URI")
+NEO4J_USERNAME = os.getenv("NEO4J_USERNAME")
+NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD")
+
+neo4j_driver = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USERNAME, NEO4J_PASSWORD))
 
 class ChatRequest(BaseModel):
     session_id: str 
