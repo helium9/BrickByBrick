@@ -42,6 +42,9 @@ These barriers prevent citizens from easily accessing the rights, schemes, and s
 
 ---
 
+![Uploading image.png…]()
+
+
 ## The Solution
 
 **BrickByBrick AI** solves this by acting as a copilot right inside the user's browser via a Chrome extension side-panel. It bridges the gap between citizens and fragmented government infrastructure by combining:
